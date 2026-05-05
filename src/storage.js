@@ -1,62 +1,73 @@
 /**
  * CaseFlow — Supabase Storage Adapter
- * ------------------------------------
- * Replaces window.storage with Supabase so all users share the same data.
- *
- * Table schema (created via SQL in Supabase dashboard):
- *
- *   create table caseflow_store (
- *     key   text primary key,
- *     value text  not null,
- *     updated_at timestamptz default now()
- *   );
- *
- *   -- Allow anonymous read/write (fine for internal trial)
- *   alter table caseflow_store enable row level security;
- *   create policy "anon all" on caseflow_store for all using (true) with check (true);
+ * Env vars read at build time by Vite:
+ *   VITE_SUPABASE_URL
+ *   VITE_SUPABASE_ANON_KEY
  */
 
-import { createClient } from '@supabase/supabase-js'
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL  || '';
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const TABLE        = 'caseflow_store';
 
-const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL
-const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY
-const TABLE         = 'caseflow_store'
-
-if (!SUPABASE_URL || !SUPABASE_ANON) {
-  console.error('[CaseFlow] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env')
+async function sbFetch(path, opts = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...opts,
+    headers: {
+      'apikey':        SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type':  'application/json',
+      'Prefer':        'return=representation',
+      ...(opts.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => res.statusText);
+    throw new Error(`Supabase ${opts.method||'GET'} -> ${res.status}: ${txt}`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
-const sb = createClient(SUPABASE_URL, SUPABASE_ANON)
+/* localStorage fallback (used locally when no env vars) */
+const ls = {
+  async get(key)        { const v=localStorage.getItem(key); if(v===null) throw new Error('Key not found: '+key); return {key,value:v}; },
+  async set(key,value)  { localStorage.setItem(key,value); return {key,value}; },
+  async delete(key)     { localStorage.removeItem(key); return {key,deleted:true}; },
+  async list(prefix='') { const keys=Object.keys(localStorage).filter(k=>!prefix||k.startsWith(prefix)); return {keys}; },
+};
 
-window.storage = {
+/* Supabase adapter */
+const sb = {
   async get(key) {
-    const { data, error } = await sb
-      .from(TABLE)
-      .select('value')
-      .eq('key', key)
-      .single()
-    if (error || !data) throw new Error(`Key not found: ${key}`)
-    return { key, value: data.value }
+    const rows = await sbFetch(`${TABLE}?key=eq.${encodeURIComponent(key)}&select=key,value`);
+    if (!rows || !rows.length) throw new Error('Key not found: ' + key);
+    return { key, value: rows[0].value };
   },
-
   async set(key, value) {
-    const { error } = await sb
-      .from(TABLE)
-      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-    if (error) { console.error('[CaseFlow] set error:', error); return null }
-    return { key, value }
+    await sbFetch(TABLE, {
+      method:  'POST',
+      headers: { 'Prefer': 'resolution=merge-duplicates,return=representation' },
+      body:    JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
+    });
+    return { key, value };
   },
-
   async delete(key) {
-    await sb.from(TABLE).delete().eq('key', key)
-    return { key, deleted: true }
+    await sbFetch(`${TABLE}?key=eq.${encodeURIComponent(key)}`, { method: 'DELETE' });
+    return { key, deleted: true };
   },
-
   async list(prefix = '') {
-    const { data } = await sb.from(TABLE).select('key')
-    const keys = (data || []).map(r => r.key).filter(k => !prefix || k.startsWith(prefix))
-    return { keys, prefix }
+    const path = prefix
+      ? `${TABLE}?key=like.${encodeURIComponent(prefix + '%')}&select=key`
+      : `${TABLE}?select=key`;
+    const rows = await sbFetch(path);
+    return { keys: (rows||[]).map(r => r.key) };
   },
-}
+};
 
-console.log('[CaseFlow] Supabase storage adapter installed →', SUPABASE_URL)
+if (SUPABASE_URL && SUPABASE_KEY) {
+  window.storage = sb;
+  console.log('[CaseFlow] Supabase connected:', SUPABASE_URL);
+} else {
+  window.storage = ls;
+  console.warn('[CaseFlow] Using localStorage — set VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY for shared mode.');
+}
