@@ -938,26 +938,20 @@ export default function App() {
         {/* Active case */}
         {totalAss>0&&curCase&&(
           <div style={{maxWidth:840,margin:"0 auto",width:"100%",padding:"20px 16px"}}>
-            {/* UID banner */}
+            {/* UID banner — shows usage count only; credentials available via View Creds */}
             {uidInfo&&(
               <div style={{background:C.navyM,borderRadius:10,padding:"10px 16px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
-                <div style={{display:"flex",gap:24,flexWrap:"wrap"}}>
-                  <div>
-                    <div style={{fontSize:10,color:"rgba(255,255,255,.45)",textTransform:"uppercase",letterSpacing:"0.08em"}}>User ID</div>
-                    <div style={{color:"#fff",fontWeight:700,fontFamily:"'Sora',sans-serif",letterSpacing:1,fontSize:15}}>{uidInfo.uid}</div>
-                  </div>
-                  <div>
-                    <div style={{fontSize:10,color:"rgba(255,255,255,.45)",textTransform:"uppercase",letterSpacing:"0.08em"}}>Password</div>
-                    <div style={{color:C.teal,fontWeight:700,fontFamily:"'Sora',sans-serif",letterSpacing:1,fontSize:15}}>{uidInfo.password}</div>
-                  </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:12,color:"rgba(255,255,255,.5)"}}>Session active</span>
+                  <span style={{...$.tag("rgba(255,255,255,.08)","rgba(255,255,255,.5)"),fontSize:11}}>{ri.icon} {ri.label}</span>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:14}}>
-                  <div>
+                  <div style={{textAlign:"right"}}>
                     <div style={{fontSize:10,color:"rgba(255,255,255,.45)",textTransform:"uppercase",letterSpacing:"0.08em"}}>This ID used</div>
-                    <div style={{color:uidUsed>=100?"#FCA5A5":uidUsed>=80?"#FCD34D":"#6EE7B7",fontWeight:700}}>{uidUsed}/{LIMIT}</div>
+                    <div style={{color:uidUsed>=100?"#FCA5A5":uidUsed>=80?"#FCD34D":"#6EE7B7",fontWeight:700,fontSize:14}}>{uidUsed} / {LIMIT}</div>
                   </div>
-                  <button style={{...$.btn("rgba(255,255,255,.1)","rgba(255,255,255,.6)"),padding:"5px 12px",fontSize:11}}
-                    onClick={()=>{setConfirmed(true);setShowCreds(true);}}>View Creds</button>
+                  <button style={{...$.btn("rgba(255,255,255,.12)","rgba(255,255,255,.7)"),padding:"6px 14px",fontSize:12}}
+                    onClick={()=>{setConfirmed(true);setShowCreds(true);}}>🔑 View Creds</button>
                 </div>
               </div>
             )}
@@ -972,11 +966,14 @@ export default function App() {
                 </div>
                 <span style={{fontSize:13,color:C.muted}}>{queue.length-1} more pending</span>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
-                {Object.entries(curCase.data||{}).map(([k,v])=>(
+              {/* Only show fields with actual data — blank/empty fields and other-sheet columns hidden automatically */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
+                {Object.entries(curCase.data||{})
+                  .filter(([,v])=>v&&String(v).trim()&&String(v).trim()!=="—"&&String(v).trim()!=="-")
+                  .map(([k,v])=>(
                   <div key={k} style={{background:C.lt,borderRadius:10,padding:"12px 14px",border:`1px solid ${C.bdr}`}}>
                     <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>{k}</div>
-                    <div style={{fontWeight:700,fontSize:15,wordBreak:"break-word",fontFamily:"'Sora',sans-serif"}}>{v||"—"}</div>
+                    <div style={{fontWeight:700,fontSize:15,wordBreak:"break-word",fontFamily:"'Sora',sans-serif"}}>{v}</div>
                   </div>
                 ))}
               </div>
@@ -986,7 +983,7 @@ export default function App() {
             <div style={{...$.card,padding:0,overflow:"hidden",marginBottom:14}}>
               <div style={{background:ri.color,padding:"12px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
                 <span style={{color:"#fff",fontWeight:700,fontSize:14,fontFamily:"'Sora',sans-serif"}}>
-                  {ri.icon} {ri.label} Form — ID: <strong>{uidInfo?.uid}</strong> · Pass: <strong>{uidInfo?.password}</strong>
+                  {ri.icon} {ri.label} Form
                 </span>
                 <a href={formUrl} target="_blank" rel="noopener noreferrer"
                   style={{color:"rgba(255,255,255,.8)",fontSize:12,textDecoration:"none",background:"rgba(255,255,255,.15)",padding:"4px 10px",borderRadius:6}}>Open in tab ↗</a>
@@ -1002,7 +999,7 @@ export default function App() {
                 Step {doneN+1} of {totalAss}
               </p>
               <p style={{color:"#065F46",fontSize:13,marginBottom:14,lineHeight:1.6}}>
-                Fill and <strong>submit the form above</strong> using ID: <strong>{uidInfo?.uid}</strong> and Password: <strong>{uidInfo?.password}</strong>. Once you have submitted it in the form, click below to load the next case.
+                Fill and <strong>submit the form above</strong>, then click below to load the next case.
               </p>
               <button style={{...$.btn(C.green),padding:"13px 32px",fontSize:15}} onClick={doComplete}>
                 {queue.length>1
