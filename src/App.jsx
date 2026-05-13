@@ -12,19 +12,27 @@ const SK = {
   users:  "cf9_users",
   log:    "cf9_log",
   uidreg: "cf9_uidreg",
+  caseArch: ts => `cf9_cases_arch_${ts}`,
+  userArch: ts => `cf9_users_arch_${ts}`,
+  archIdx:  "cf9_arch_index",   // list of {key, ts, type, label}
 };
 
 const DEFAULT_FORMS = {
-  analyser:   "https://forms.gle/PrAjh7xVL8HGGdq37",
-  supervisor: "https://forms.gle/6S9PzhsRHs9mnmYn8",
+  analyser:      "https://forms.gle/PrAjh7xVL8HGGdq37",
+  supervisor:    "https://forms.gle/6S9PzhsRHs9mnmYn8",
+  preauthoriser: "",
 };
 
 const ROLES = {
-  analyser:   { label:"Analyser",          color:"#0891B2", bg:"#E0F7FA", icon:"🔬" },
-  supervisor: { label:"Supervisor",         color:"#7C3AED", bg:"#EDE9FE", icon:"👨‍⚕️" },
-  upload:     { label:"Data Upload",        color:"#D97706", bg:"#FEF3C7", icon:"📤" },
-  credential: { label:"Credential Manager", color:"#059669", bg:"#D1FAE5", icon:"🔑" },
-  admin:      { label:"Super Admin",        color:"#DC2626", bg:"#FEE2E2", icon:"⚙️"  },
+  analyser:      { label:"Analyser",          color:"#0891B2", bg:"#E0F7FA", icon:"🔬" },
+  supervisor:    { label:"Supervisor",         color:"#7C3AED", bg:"#EDE9FE", icon:"👨‍⚕️" },
+  preauthoriser: { label:"Preauthoriser",      color:"#0369A1", bg:"#DBEAFE", icon:"📋" },
+  upload:        { label:"Data Upload",        color:"#D97706", bg:"#FEF3C7", icon:"📤" },
+  mis:           { label:"MIS",                color:"#065F46", bg:"#D1FAE5", icon:"📊" },
+  state_manager: { label:"State Manager",      color:"#4C1D95", bg:"#EDE9FE", icon:"🗺️" },
+  viewer:        { label:"Viewer",             color:"#475569", bg:"#F1F5F9", icon:"👁️"  },
+  credential:    { label:"Credential Manager", color:"#059669", bg:"#D1FAE5", icon:"🔑" },
+  admin:         { label:"Super Admin",        color:"#DC2626", bg:"#FEE2E2", icon:"⚙️"  },
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -297,14 +305,15 @@ function UserForm({initial,onSave,onCancel,existingUsers}) {
   const addUID=()=>setUserIds(ids=>[...ids,{uid:"",password:"",active:true,seq:ids.length+1}]);
   const updUID=(i,f,v)=>setUserIds(ids=>ids.map((x,j)=>j===i?{...x,[f]:v}:x));
   const remUID=i=>setUserIds(ids=>ids.filter((_,j)=>j!==i).map((x,j)=>({...x,seq:j+1})));
-  const isDr=["analyser","supervisor"].includes(role);
+  const isDr=["analyser","supervisor","preauthoriser"].includes(role);
 
   const save=()=>{
     if (!name.trim()){setErr("Name is required.");return;}
     if (!pin.trim()) {setErr("PIN is required."); return;}
     const dup=existingUsers?.find(u=>norm(u.name)===norm(name)&&u.name!==initial?.name);
     if (dup){setErr("Name already exists.");return;}
-    if (isDr) for (const u of userIds) if (!u.uid.trim()||!u.password.trim()){setErr("All User IDs and passwords must be filled.");return;}
+    // Only require UID to be filled — password is optional
+    if (isDr) for (const u of userIds) if (!u.uid.trim()){setErr("All User IDs must be filled.");return;}
     onSave({name:name.trim(),pin:pin.trim(),role,userIds:isDr?userIds:[]});
   };
 
@@ -334,7 +343,7 @@ function UserForm({initial,onSave,onCancel,existingUsers}) {
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div>
                 <label style={$.lbl}>User IDs (each = {LIMIT} cases globally)</label>
-                <p style={{fontSize:12,color:C.muted,marginTop:-4}}>Add as many as needed. System rotates automatically.</p>
+                <p style={{fontSize:12,color:C.muted,marginTop:-4}}>Passwords are optional — add only if you want CaseFlow to display them to the doctor.</p>
               </div>
               <button onClick={addUID} style={{...$.btn(C.teal),padding:"5px 12px",fontSize:12}}>+ Add ID</button>
             </div>
@@ -344,10 +353,10 @@ function UserForm({initial,onSave,onCancel,existingUsers}) {
                   padding:"10px 12px",background:C.lt,borderRadius:9,border:`1px solid ${C.bdr}`}}>
                   <div style={{width:24,height:24,background:C.navy,color:"#fff",borderRadius:"50%",
                     display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{i+1}</div>
-                  <input style={{...$.inp,padding:"7px 10px",fontSize:13}} placeholder="User ID"
+                  <input style={{...$.inp,padding:"7px 10px",fontSize:13}} placeholder={`User ID e.g. ANLSR00${i+1}`}
                     value={uid.uid} onChange={e=>updUID(i,"uid",e.target.value)}/>
-                  <input style={{...$.inp,padding:"7px 10px",fontSize:13}} placeholder="Password"
-                    value={uid.password} onChange={e=>updUID(i,"password",e.target.value)}/>
+                  <input style={{...$.inp,padding:"7px 10px",fontSize:13}} placeholder="Password (optional)"
+                    value={uid.password||""} onChange={e=>updUID(i,"password",e.target.value)}/>
                   <button onClick={()=>remUID(i)} style={{...$.btn("#FEE2E2",C.red),padding:"6px 10px",fontSize:12}}>✕</button>
                 </div>
               ))}
@@ -425,16 +434,19 @@ export default function App() {
   const [addUser, setAddUser] =useState(false);
 
   // ── Settings ─────────────────────────────────────────────
-  const [newForms,      setNewForms]      =useState({analyser:"",supervisor:""});
-  const [newDataUrls,   setNewDataUrls]   =useState({analyser:"",supervisor:""});
+  const [newForms,      setNewForms]      =useState({analyser:"",supervisor:"",preauthoriser:""});
+  const [newDataUrls,   setNewDataUrls]   =useState({analyser:"",supervisor:"",preauthoriser:""});
   const [newAdminPw,    setNewAdminPw]    =useState("");
 
   // Sync state
-  const [syncLog,    setSyncLog]    =useState([]);   // [{ts,updated,uidCounts,errors}]
+  const [syncLog,    setSyncLog]    =useState([]);
   const [syncing,    setSyncing]    =useState(false);
   const [syncMsg,    setSyncMsg]    =useState("");
-  // Sync column mapping (stored in cfg)
   const [syncCfgOpen,setSyncCfgOpen]=useState(false);
+
+  // Archive state
+  const [archIdx,   setArchIdx]    =useState([]);
+  const [archOpen,  setArchOpen]   =useState(false);
 
   // ── File input refs ──────────────────────────────────────
   const caseFileRef = useRef(null);
@@ -446,21 +458,23 @@ export default function App() {
   useEffect(()=>{
     (async()=>{
       try {
-        const [cr,csr,ur,lr,rr]=await Promise.all([
-          window.storage.get(SK.cfg,    true).catch(()=>null),
-          window.storage.get(SK.cases,  true).catch(()=>null),
-          window.storage.get(SK.users,  true).catch(()=>null),
-          window.storage.get(SK.log,    true).catch(()=>null),
-          window.storage.get(SK.uidreg, true).catch(()=>null),
+        const [cr,csr,ur,lr,rr,ar]=await Promise.all([
+          window.storage.get(SK.cfg,     true).catch(()=>null),
+          window.storage.get(SK.cases,   true).catch(()=>null),
+          window.storage.get(SK.users,   true).catch(()=>null),
+          window.storage.get(SK.log,     true).catch(()=>null),
+          window.storage.get(SK.uidreg,  true).catch(()=>null),
+          window.storage.get(SK.archIdx, true).catch(()=>null),
         ]);
         const lCfg    =cr?.value  ?JSON.parse(cr.value)  :null;
         const lCases  =csr?.value ?JSON.parse(csr.value) :[];
         const lUsers  =ur?.value  ?JSON.parse(ur.value)  :[];
         const lLog    =lr?.value  ?JSON.parse(lr.value)  :[];
         const lUidReg =rr?.value  ?JSON.parse(rr.value)  :{};
-        setCfg(lCfg);setCases(lCases);setUsers(lUsers);setLog(lLog);setUidReg(lUidReg);
+        const lArch   =ar?.value  ?JSON.parse(ar.value)  :[];
+        setCfg(lCfg);setCases(lCases);setUsers(lUsers);setLog(lLog);setUidReg(lUidReg);setArchIdx(lArch);
         if (!lCfg){
-          const dc={formUrls:DEFAULT_FORMS,formDataUrls:{analyser:"",supervisor:""},syncCols:{caseKey:"",formCaseKey:"",formUidCol:""},adminPass:"admin123",detailCols:[],importedAt:null};
+          const dc={formUrls:DEFAULT_FORMS,formDataUrls:{analyser:"",supervisor:"",preauthoriser:""},syncCols:{caseKey:"",formCaseKey:"",formUidCol:""},adminPass:"admin123",detailCols:[],importedAt:null};
           await window.storage.set(SK.cfg,JSON.stringify(dc),true);
           setCfg(dc);setSc("admin");setTab("import");
         } else { setSc("login"); }
@@ -476,6 +490,31 @@ export default function App() {
   const saveUsers =async nu=>{await window.storage.set(SK.users, JSON.stringify(nu),true);setUsers(nu);};
   const saveLog   =async nl=>{await window.storage.set(SK.log,   JSON.stringify(nl),true);setLog(nl);};
   const saveUidReg=async nr=>{await window.storage.set(SK.uidreg,JSON.stringify(nr),true);setUidReg(nr);};
+
+  // Archive old data then replace — keeps history for reference
+  const archiveThenSaveCases=async(newData,label)=>{
+    if (cases.length>0){
+      const ts=Date.now();
+      const key=SK.caseArch(ts);
+      await window.storage.set(key,JSON.stringify(cases),true).catch(()=>{});
+      const newIdx=[...archIdx,{key,ts,type:"cases",label:label||`Cases ${new Date(ts).toLocaleString("en-IN")}`,count:cases.length}];
+      await window.storage.set(SK.archIdx,JSON.stringify(newIdx),true).catch(()=>{});
+      setArchIdx(newIdx);
+    }
+    await saveCases(newData);
+  };
+
+  const archiveThenSaveUsers=async(newData,label)=>{
+    if (users.length>0){
+      const ts=Date.now();
+      const key=SK.userArch(ts);
+      await window.storage.set(key,JSON.stringify(users),true).catch(()=>{});
+      const newIdx=[...archIdx,{key,ts,type:"users",label:label||`User Master ${new Date(ts).toLocaleString("en-IN")}`,count:users.length}];
+      await window.storage.set(SK.archIdx,JSON.stringify(newIdx),true).catch(()=>{});
+      setArchIdx(newIdx);
+    }
+    await saveUsers(newData);
+  };
 
   // ═══════════════════════════════════════════════════════
   // LOGIN
@@ -496,9 +535,18 @@ export default function App() {
       if (!userEntry){setLErr("Invalid User ID or password.");return;}
     }
     const role=userEntry.role;
-    if (role==="admin")     {setSession({userEntry,role,isAdmin:true});setSc("admin");setTab("dash");  return;}
-    if (role==="upload")    {setSession({userEntry,role});             setSc("admin");setTab("import");return;}
-    if (role==="credential"){setSession({userEntry,role});             setSc("admin");setTab("users"); return;}
+    if (role==="admin")        {setSession({userEntry,role,isAdmin:true});setSc("admin");setTab("dash");   return;}
+    if (role==="upload")       {setSession({userEntry,role});             setSc("admin");setTab("import"); return;}
+    if (role==="mis")          {setSession({userEntry,role});             setSc("admin");setTab("import"); return;}
+    if (role==="state_manager"){setSession({userEntry,role});             setSc("admin");setTab("import"); return;}
+    if (role==="credential")   {setSession({userEntry,role});             setSc("admin");setTab("users");  return;}
+    if (role==="viewer")       {setSession({userEntry,role});             setSc("admin");setTab("report"); return;}
+
+    // Preauthoriser — just show the form, no case allocation
+    if (role==="preauthoriser"){
+      setSession({userEntry,activeUID:null,role,doctorName:userEntry.name});
+      setSc("preauth"); return;
+    }
 
     if (!activeUID){setLErr("All your User IDs have reached the 120-case limit. Contact your coordinator.");return;}
 
@@ -614,9 +662,8 @@ export default function App() {
     return pins;
   };
 
-  const activateImport=async(preview,pins,currentUsers)=>{
-    await saveCases(preview);
-    // Create users for new doctors with auto PINs
+  const activateImport=async(preview,pins,currentUsers,importLabel)=>{
+    await archiveThenSaveCases(preview, importLabel||`Import ${new Date().toLocaleDateString("en-IN")} (${preview.length} cases)`);
     let newUsers=[...currentUsers];
     Object.entries(pins).forEach(([dn,pin])=>{
       if (!newUsers.find(u=>norm(u.name)===norm(dn))){
@@ -626,7 +673,7 @@ export default function App() {
     });
     await saveUsers(newUsers);
     await saveCfg({...cfg,detailCols:detCols,importMode,analyserCol,supervisorCol:supvCol,roleCol,doctorNameCol:nameCol,importedAt:new Date().toISOString()});
-    alert(`✅ Imported ${preview.length} cases. ${Object.keys(pins).length} new doctor account(s) created with auto-PINs.`);
+    alert(`✅ Imported ${preview.length} cases. Previous data archived. ${Object.keys(pins).length} new doctor account(s) created.`);
     setWStep(1);setSheets(null);setAllH([]);setAutoPins({});setTab("dash");
   };
 
@@ -707,16 +754,14 @@ export default function App() {
       const ab=await f.arrayBuffer();
       const imported=parseUserMaster(ab);
       if (!imported.length){setUmErr("No users found. Check the format.");setUmLoad(false);return;}
-
-      // Merge with existing: update if name matches, else add
       let merged=[...users];
       imported.forEach(nu=>{
         const idx=merged.findIndex(u=>norm(u.name)===norm(nu.name));
         if (idx>=0) merged[idx]={...merged[idx],...nu};
         else merged.push(nu);
       });
-      await saveUsers(merged);
-      setUmMsg(`✅ ${imported.length} user(s) imported/updated successfully.`);
+      await archiveThenSaveUsers(merged, `User Master ${new Date().toLocaleDateString("en-IN")} (${merged.length} users)`);
+      setUmMsg(`✅ ${imported.length} user(s) imported/updated. Previous User Master archived.`);
     } catch(e){ setUmErr("Error reading file: "+e.message); }
     setUmLoad(false);
   };
@@ -1022,7 +1067,14 @@ export default function App() {
   if (sc==="admin") {
     const role    =session?.role||"admin";
     const isAdmin =role==="admin";
-    const visTabs =isAdmin?["dash","import","users","report","settings"]:role==="upload"?["import"]:role==="credential"?["users"]:["dash"];
+    const visTabs = isAdmin
+      ? ["dash","import","users","report","settings"]
+      : role==="upload"        ? ["import"]
+      : role==="mis"           ? ["import","report"]
+      : role==="state_manager" ? ["import","report"]
+      : role==="credential"    ? ["users"]
+      : role==="viewer"        ? ["dash","report"]
+      : ["dash"];
     const TAB={
       dash:    {icon:"📊",label:"Dashboard"},
       import:  {icon:"📥",label:"Import Cases"},
@@ -1305,7 +1357,30 @@ export default function App() {
                     <h2 style={{fontFamily:"'Sora',sans-serif",fontWeight:800,fontSize:21,margin:0}}>User Master</h2>
                     <p style={{color:C.muted,fontSize:13,marginTop:4}}>{users.length} users · PINs, User IDs, roles</p>
                   </div>
-                  <button style={$.btn(C.teal)} onClick={()=>setAddUser(true)}>+ Add User</button>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {/* Download current user master as XLSX */}
+                    <button style={{...$.btn(C.green),padding:"9px 16px",fontSize:13}} onClick={()=>{
+                      const XLSX_=window.XLSX||require&&require('xlsx');
+                      // Build rows
+                      const maxIds=Math.max(0,...users.map(u=>u.userIds?.length||0));
+                      const idCols=Array.from({length:maxIds},(_, i)=>[`User ID ${i+1}`,`Password ${i+1}`]).flat();
+                      const headers=["Name","Role","PIN",...idCols];
+                      const rows=users.map(u=>{
+                        const base=[u.name,ROLES[u.role]?.label||u.role,u.pin];
+                        const ids=(u.userIds||[]).flatMap(x=>[x.uid||"",x.password||""]);
+                        while(ids.length<maxIds*2) ids.push("");
+                        return [...base,...ids];
+                      });
+                      const wb=XLSX.utils.book_new();
+                      const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
+                      XLSX.utils.book_append_sheet(wb,ws,"User Master");
+                      XLSX.writeFile(wb,`UserMaster_${new Date().toLocaleDateString("en-IN").replace(/\//g,"-")}.xlsx`);
+                    }}>⬇ Download XLSX</button>
+                    {/* Only admin and credential manager can add users */}
+                    {(isAdmin||role==="credential")&&(
+                      <button style={$.btn(C.teal)} onClick={()=>setAddUser(true)}>+ Add User</button>
+                    )}
+                  </div>
                 </div>
 
                 {addUser &&<UserForm onSave={async d=>{await saveUsers([...users,d]);setAddUser(false);}} onCancel={()=>setAddUser(false)} existingUsers={users}/>}
@@ -1491,7 +1566,7 @@ export default function App() {
                 <div style={{...$.card,marginBottom:16}}>
                   <h3 style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,marginBottom:4}}>🔗 Google Form URLs <span style={{fontSize:12,color:C.muted,fontWeight:400}}>(embedded in doctor's case screen)</span></h3>
                   <p style={{fontSize:13,color:C.muted,marginBottom:16}}>The form doctors fill in for each case. Shown as an embedded iframe alongside the case data.</p>
-                  {["analyser","supervisor"].map(r=>{
+                  {["analyser","supervisor","preauthoriser"].map(r=>{
                     const ri=ROLES[r];
                     return(
                       <div key={r} style={{marginBottom:16}}>
@@ -1499,11 +1574,20 @@ export default function App() {
                         <div style={{fontSize:12,color:C.muted,padding:"8px 12px",background:C.lt,borderRadius:8,marginBottom:8,wordBreak:"break-all"}}>
                           Current: {cfg?.formUrls?.[r]||"Not set"}
                         </div>
-                        <input style={$.inp} placeholder="https://forms.gle/… or full /viewform URL" value={newForms[r]}
+                        <input style={$.inp} placeholder="https://forms.gle/… or full /viewform URL" value={newForms[r]||""}
                           onChange={e=>setNewForms(f=>({...f,[r]:e.target.value}))}/>
                       </div>
                     );
                   })}
+                  <button style={$.btn(C.teal)} onClick={async()=>{
+                    const fu={
+                      analyser:      newForms.analyser.trim()      ||cfg?.formUrls?.analyser||"",
+                      supervisor:    newForms.supervisor.trim()    ||cfg?.formUrls?.supervisor||"",
+                      preauthoriser: newForms.preauthoriser.trim() ||cfg?.formUrls?.preauthoriser||"",
+                    };
+                    await saveCfg({...cfg,formUrls:fu});alert("✅ Updated!");setNewForms({analyser:"",supervisor:"",preauthoriser:""});
+                  }}>Update Form URLs</button>
+                  <IBox type="warn">If the form does not embed, use the full browser URL ending in /viewform — not the short forms.gle link.</IBox>
                   <button style={$.btn(C.teal)} onClick={async()=>{
                     const fu={analyser:newForms.analyser.trim()||cfg?.formUrls?.analyser,supervisor:newForms.supervisor.trim()||cfg?.formUrls?.supervisor};
                     await saveCfg({...cfg,formUrls:fu});alert("✅ Updated!");setNewForms({analyser:"",supervisor:""});
@@ -1519,7 +1603,7 @@ export default function App() {
                     Open your Form → Responses tab → click the Google Sheets icon → copy the sheet URL.<br/>
                     The sheet must be shared as <strong>Anyone with the link → Viewer</strong>.
                   </p>
-                  {["analyser","supervisor"].map(r=>{
+                  {["analyser","supervisor","preauthoriser"].map(r=>{
                     const ri=ROLES[r];
                     return(
                       <div key={r} style={{marginBottom:16}}>
@@ -1527,14 +1611,18 @@ export default function App() {
                         <div style={{fontSize:12,color:C.muted,padding:"8px 12px",background:C.lt,borderRadius:8,marginBottom:8,wordBreak:"break-all"}}>
                           Current: {cfg?.formDataUrls?.[r]||"Not set"}
                         </div>
-                        <input style={$.inp} placeholder="https://docs.google.com/spreadsheets/d/…" value={newDataUrls[r]}
+                        <input style={$.inp} placeholder="https://docs.google.com/spreadsheets/d/…" value={newDataUrls[r]||""}
                           onChange={e=>setNewDataUrls(f=>({...f,[r]:e.target.value}))}/>
                       </div>
                     );
                   })}
                   <button style={{...$.btn(C.teal),marginBottom:16}} onClick={async()=>{
-                    const fu={analyser:newDataUrls.analyser.trim()||cfg?.formDataUrls?.analyser,supervisor:newDataUrls.supervisor.trim()||cfg?.formDataUrls?.supervisor};
-                    await saveCfg({...cfg,formDataUrls:fu});alert("✅ Form Response URLs updated!");setNewDataUrls({analyser:"",supervisor:""});
+                    const fu={
+                      analyser:      newDataUrls.analyser.trim()      ||cfg?.formDataUrls?.analyser||"",
+                      supervisor:    newDataUrls.supervisor.trim()    ||cfg?.formDataUrls?.supervisor||"",
+                      preauthoriser: newDataUrls.preauthoriser.trim() ||cfg?.formDataUrls?.preauthoriser||"",
+                    };
+                    await saveCfg({...cfg,formDataUrls:fu});alert("✅ Form Response URLs updated!");setNewDataUrls({analyser:"",supervisor:"",preauthoriser:""});
                   }}>Save Response Sheet URLs</button>
 
                   {/* Sync Column Mapping */}
@@ -1616,12 +1704,69 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* D. Danger zone */}
+                {/* D. Archive — download/delete old uploads */}
+                <div style={{...$.card,marginBottom:16}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
+                    <h3 style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,margin:0}}>🗄️ Archive — Previous Uploads</h3>
+                    <button style={{...$.btn(C.lt,C.muted),border:`1px solid ${C.bdr}`,padding:"5px 12px",fontSize:12}}
+                      onClick={()=>setArchOpen(o=>!o)}>{archOpen?"▲ Hide":"▼ Show"} ({archIdx.length} archived)</button>
+                  </div>
+                  {archOpen&&(
+                    archIdx.length===0
+                    ? <p style={{color:C.muted,fontSize:13}}>No archived files yet. Previous uploads are saved here when you import new data.</p>
+                    : <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        {[...archIdx].reverse().map((a,i)=>(
+                          <div key={a.key} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                            padding:"10px 14px",background:C.lt,borderRadius:9,border:`1px solid ${C.bdr}`,flexWrap:"wrap",gap:8}}>
+                            <div>
+                              <div style={{fontWeight:600,fontSize:13,marginBottom:2}}>
+                                {a.type==="cases"?"📋 Case Data":"👥 User Master"} — {a.label}
+                              </div>
+                              <div style={{fontSize:12,color:C.muted}}>{a.count} records · {new Date(a.ts).toLocaleString("en-IN")}</div>
+                            </div>
+                            <div style={{display:"flex",gap:8,flexShrink:0}}>
+                              <button style={{...$.btn("#EFF6FF","#1E40AF"),padding:"5px 12px",fontSize:12}} onClick={async()=>{
+                                try {
+                                  const r=await window.storage.get(a.key,true).catch(()=>null);
+                                  if (!r?.value){alert("Archive file not found.");return;}
+                                  const data=JSON.parse(r.value);
+                                  const wb=XLSX.utils.book_new();
+                                  if (a.type==="cases"){
+                                    const rows=data.map(c=>({...c.data,role:c.role,doctor:c.doctorName,seq:c.seq,status:c.status,sheet:c.sheet}));
+                                    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),"Cases");
+                                  } else {
+                                    const maxIds=Math.max(0,...data.map(u=>u.userIds?.length||0));
+                                    const hdrs=["Name","Role","PIN",...Array.from({length:maxIds},(_,j)=>[`User ID ${j+1}`,`Password ${j+1}`]).flat()];
+                                    const rows=data.map(u=>{const b=[u.name,ROLES[u.role]?.label||u.role,u.pin];const ids=(u.userIds||[]).flatMap(x=>[x.uid||"",x.password||""]);while(ids.length<maxIds*2)ids.push("");return [...b,...ids];});
+                                    XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([hdrs,...rows]),"User Master");
+                                  }
+                                  XLSX.writeFile(wb,`Archive_${a.type}_${new Date(a.ts).toLocaleDateString("en-IN").replace(/\//g,"-")}.xlsx`);
+                                } catch(e){alert("Download failed: "+e.message);}
+                              }}>⬇ Download</button>
+                              {isAdmin&&(
+                                <button style={{...$.btn("#FEE2E2",C.red),padding:"5px 12px",fontSize:12}} onClick={async()=>{
+                                  if(!confirm(`Delete this archive entry? This cannot be undone.`))return;
+                                  await window.storage.delete(a.key,true).catch(()=>{});
+                                  const newIdx=archIdx.filter(x=>x.key!==a.key);
+                                  await window.storage.set(SK.archIdx,JSON.stringify(newIdx),true).catch(()=>{});
+                                  setArchIdx(newIdx);
+                                }}>🗑 Delete</button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                  )}
+                </div>
+
+                {/* E. Danger zone */}
                 <div style={$.card}>
                   <h3 style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:16,marginBottom:8}}>⚠️ Danger Zone</h3>
-                  <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:10}}>
+                  <p style={{fontSize:13,color:C.muted,marginBottom:12}}>Admin only. These actions cannot be undone.</p>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
                     <button style={$.btn("#FEE2E2",C.red)} onClick={async()=>{if(!confirm("Reset ALL progress and UID counts?"))return;await saveCases(cases.map(c=>({...c,status:"pending"})));await saveLog([]);await saveUidReg({});setSyncLog([]);setSyncMsg("");alert("✅ Reset.");}}>Reset All Progress</button>
-                    <button style={$.btn("#FEE2E2",C.red)} onClick={async()=>{if(!confirm("Delete ALL cases?"))return;await saveCases([]);await saveLog([]);await saveUidReg({});setSyncLog([]);setSyncMsg("");alert("✅ Deleted.");}}>Delete All Cases</button>
+                    <button style={$.btn("#FEE2E2",C.red)} onClick={async()=>{if(!confirm("Delete ALL cases from active database?"))return;await saveCases([]);await saveLog([]);await saveUidReg({});setSyncLog([]);setSyncMsg("");alert("✅ Deleted. Archive preserved.");}}>Clear Active Cases</button>
+                    <button style={$.btn("#FEE2E2",C.red)} onClick={async()=>{if(!confirm("Delete ALL archived files permanently?"))return;for(const a of archIdx){await window.storage.delete(a.key,true).catch(()=>{});}await window.storage.delete(SK.archIdx,true).catch(()=>{});setArchIdx([]);alert("✅ All archives deleted.");}}>🗑 Clear All Archives</button>
                   </div>
                 </div>
               </div>
