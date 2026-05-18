@@ -432,6 +432,7 @@ export default function App() {
   // ── User management ──────────────────────────────────────
   const [editUser,setEditUser]=useState(null);
   const [addUser, setAddUser] =useState(false);
+  const [selectedUsers, setSelectedUsers] =useState(new Set());  // multi-select
 
   // ── Settings ─────────────────────────────────────────────
   const [newForms,      setNewForms]      =useState({analyser:"",supervisor:"",preauthoriser:""});
@@ -538,9 +539,9 @@ export default function App() {
     if (role==="admin")        {setSession({userEntry,role,isAdmin:true});setSc("admin");setTab("dash");   return;}
     if (role==="upload")       {setSession({userEntry,role});             setSc("admin");setTab("import"); return;}
     if (role==="mis")          {setSession({userEntry,role});             setSc("admin");setTab("import"); return;}
-    if (role==="state_manager"){setSession({userEntry,role});             setSc("admin");setTab("import"); return;}
-    if (role==="credential")   {setSession({userEntry,role});             setSc("admin");setTab("users");  return;}
-    if (role==="viewer")       {setSession({userEntry,role});             setSc("admin");setTab("report"); return;}
+    if (role==="state_manager"){setSession({userEntry,role});             setSc("admin");setTab("dash");   return;}
+    if (role==="credential")   {setSession({userEntry,role});             setSc("admin");setTab("dash");   return;}
+    if (role==="viewer")       {setSession({userEntry,role});             setSc("admin");setTab("dash");   return;}
 
     // Preauthoriser — just show the form, no case allocation
     if (role==="preauthoriser"){
@@ -748,20 +749,33 @@ export default function App() {
   // ═══════════════════════════════════════════════════════
   // USER MASTER UPLOAD
   // ═══════════════════════════════════════════════════════
+  // Roles that can be changed via XLS upload (doctor roles only)
+  const DOCTOR_ROLES = new Set(["analyser","supervisor","preauthoriser"]);
+  // Roles protected from XLS upload — only Super Admin can change these
+  const PROTECTED_ROLES = new Set(["admin","upload","mis","state_manager","credential","viewer"]);
+
   const onUserMasterFile=async f=>{
     setUmLoad(true);setUmMsg("");setUmErr("");
     try {
       const ab=await f.arrayBuffer();
       const imported=parseUserMaster(ab);
       if (!imported.length){setUmErr("No users found. Check the format.");setUmLoad(false);return;}
-      let merged=[...users];
-      imported.forEach(nu=>{
-        const idx=merged.findIndex(u=>norm(u.name)===norm(nu.name));
-        if (idx>=0) merged[idx]={...merged[idx],...nu};
-        else merged.push(nu);
-      });
+
+      // Validate: reject any import row that tries to set a protected role
+      const protectedAttempts=imported.filter(u=>PROTECTED_ROLES.has(u.role));
+      if (protectedAttempts.length>0){
+        setUmErr(`⚠ Upload blocked: ${protectedAttempts.length} row(s) have protected roles (${protectedAttempts.map(u=>u.name).join(", ")}). Admin/system roles can only be managed by Super Admin directly.`);
+        setUmLoad(false); return;
+      }
+
+      // Keep all protected-role users unchanged
+      const protectedUsers=users.filter(u=>PROTECTED_ROLES.has(u.role));
+      // Replace all doctor-role users with imported data (full replace, not merge)
+      const newDoctorUsers=imported.filter(u=>DOCTOR_ROLES.has(u.role));
+      const merged=[...protectedUsers,...newDoctorUsers];
+
       await archiveThenSaveUsers(merged, `User Master ${new Date().toLocaleDateString("en-IN")} (${merged.length} users)`);
-      setUmMsg(`✅ ${imported.length} user(s) imported/updated. Previous User Master archived.`);
+      setUmMsg(`✅ ${newDoctorUsers.length} doctor user(s) replaced. ${protectedUsers.length} admin/system user(s) preserved unchanged.`);
     } catch(e){ setUmErr("Error reading file: "+e.message); }
     setUmLoad(false);
   };
@@ -1067,13 +1081,14 @@ export default function App() {
   if (sc==="admin") {
     const role    =session?.role||"admin";
     const isAdmin =role==="admin";
-    const visTabs = isAdmin
-      ? ["dash","import","users","report","settings"]
-      : role==="upload"        ? ["import"]
-      : role==="mis"           ? ["import","report"]
-      : role==="state_manager" ? ["import","report"]
-      : role==="credential"    ? ["users"]
-      : role==="viewer"        ? ["dash","report"]
+    // Tab access per role
+    const visTabs = (isAdmin||role==="admin")
+      ? ["dash","import","users","report","settings"]     // Super Admin / Admin: everything
+      : role==="upload"        ? ["import"]               // Data Upload: import only
+      : role==="mis"           ? ["import"]               // MIS: import only
+      : role==="state_manager" ? ["dash","report"]        // State Manager: dash + reports
+      : role==="credential"    ? ["dash","import","users","report"]  // All except settings
+      : role==="viewer"        ? ["dash","report"]        // Viewer: dash + reports
       : ["dash"];
     const TAB={
       dash:    {icon:"📊",label:"Dashboard"},
@@ -1352,31 +1367,41 @@ export default function App() {
             {/* ══ USER MASTER ══ */}
             {tab==="users"&&(
               <div className="up">
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+
+                {/* Header row */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:12}}>
                   <div>
-                    <h2 style={{fontFamily:"'Sora',sans-serif",fontWeight:800,fontSize:21,margin:0}}>User Master</h2>
-                    <p style={{color:C.muted,fontSize:13,marginTop:4}}>{users.length} users · PINs, User IDs, roles</p>
+                    <h2 style={{fontFamily:"'Sora',sans-serif",fontWeight:800,fontSize:21,margin:0}}>User Management</h2>
+                    <p style={{color:C.muted,fontSize:13,marginTop:4}}>{users.length} users · {selectedUsers.size>0&&<strong style={{color:C.amber}}>{selectedUsers.size} selected</strong>}</p>
                   </div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                    {/* Download current user master as XLSX */}
-                    <button style={{...$.btn(C.green),padding:"9px 16px",fontSize:13}} onClick={()=>{
-                      const XLSX_=window.XLSX||require&&require('xlsx');
-                      // Build rows
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    {/* Download */}
+                    <button style={{...$.btn(C.green),padding:"9px 14px",fontSize:13}} onClick={()=>{
                       const maxIds=Math.max(0,...users.map(u=>u.userIds?.length||0));
-                      const idCols=Array.from({length:maxIds},(_, i)=>[`User ID ${i+1}`,`Password ${i+1}`]).flat();
-                      const headers=["Name","Role","PIN",...idCols];
+                      const idCols=Array.from({length:maxIds},(_,i)=>[`User ID ${i+1}`,`Password ${i+1}`]).flat();
+                      const hdrs=["Name","Role","PIN",...idCols];
                       const rows=users.map(u=>{
                         const base=[u.name,ROLES[u.role]?.label||u.role,u.pin];
                         const ids=(u.userIds||[]).flatMap(x=>[x.uid||"",x.password||""]);
-                        while(ids.length<maxIds*2) ids.push("");
+                        while(ids.length<maxIds*2)ids.push("");
                         return [...base,...ids];
                       });
                       const wb=XLSX.utils.book_new();
-                      const ws=XLSX.utils.aoa_to_sheet([headers,...rows]);
-                      XLSX.utils.book_append_sheet(wb,ws,"User Master");
+                      XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([hdrs,...rows]),"User Master");
                       XLSX.writeFile(wb,`UserMaster_${new Date().toLocaleDateString("en-IN").replace(/\//g,"-")}.xlsx`);
                     }}>⬇ Download XLSX</button>
-                    {/* Only admin and credential manager can add users */}
+                    {/* Delete selected - only admin/super admin */}
+                    {selectedUsers.size>0&&isAdmin&&(
+                      <button style={{...$.btn("#FEE2E2",C.red),padding:"9px 14px",fontSize:13}} onClick={async()=>{
+                        const sel=[...selectedUsers];
+                        const hasProtected=sel.some(n=>["admin","upload","mis","state_manager","credential","viewer"].includes(users.find(u=>u.name===n)?.role));
+                        if(hasProtected&&!confirm("Some selected users have protected roles. Super Admin can delete them. Continue?"))return;
+                        if(!confirm(`Delete ${sel.length} selected user(s)? This cannot be undone.`))return;
+                        await saveUsers(users.filter(u=>!selectedUsers.has(u.name)));
+                        setSelectedUsers(new Set());
+                      }}>🗑 Delete Selected ({selectedUsers.size})</button>
+                    )}
+                    {/* Add user - admin and credential manager only */}
                     {(isAdmin||role==="credential")&&(
                       <button style={$.btn(C.teal)} onClick={()=>setAddUser(true)}>+ Add User</button>
                     )}
@@ -1386,53 +1411,94 @@ export default function App() {
                 {addUser &&<UserForm onSave={async d=>{await saveUsers([...users,d]);setAddUser(false);}} onCancel={()=>setAddUser(false)} existingUsers={users}/>}
                 {editUser&&<UserForm initial={editUser} onSave={async d=>{await saveUsers(users.map(u=>u.name===editUser.name?d:u));setEditUser(null);}} onCancel={()=>setEditUser(null)} existingUsers={users.filter(u=>u.name!==editUser?.name)}/>}
 
-                {/* Bulk upload from Excel */}
-                <div style={{...$.card,marginBottom:20,background:C.lt,border:`1.5px dashed ${C.teal}`}}>
-                  <h3 style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:15,marginBottom:6,color:C.teal}}>📋 Bulk Upload User Master via Excel</h3>
-                  <p style={{fontSize:13,color:C.muted,marginBottom:12,lineHeight:1.6}}>
-                    Upload an Excel file with these exact column headers:<br/>
-                    <code style={{background:"#fff",padding:"2px 6px",borderRadius:4,fontSize:12}}>
-                      Name | Role | PIN | User ID 1 | Password 1 | User ID 2 | Password 2 | User ID 3 | Password 3 | ...
-                    </code>
-                  </p>
-                  <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
-                    <input ref={umFileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}}
-                      onChange={e=>{const f=e.target.files[0];if(f)onUserMasterFile(f);e.target.value="";}}/>
-                    <button style={{...$.btn(C.teal),padding:"10px 22px"}} onClick={()=>umFileRef.current?.click()} disabled={umLoad}>
-                      {umLoad?"Importing…":"📂 Upload User Master Excel"}
-                    </button>
-                    {umMsg&&<span style={{color:C.green,fontWeight:600,fontSize:13}}>{umMsg}</span>}
-                    {umErr&&<span style={{color:C.red,fontSize:13}}>⚠ {umErr}</span>}
+                {/* Bulk upload - admin and credential manager only */}
+                {(isAdmin||role==="credential")&&(
+                  <div style={{...$.card,marginBottom:16,background:C.lt,border:`1.5px dashed ${C.teal}`}}>
+                    <h3 style={{fontFamily:"'Sora',sans-serif",fontWeight:700,fontSize:15,marginBottom:6,color:C.teal}}>📋 Bulk Upload User Master (Analyser / Supervisor / Preauthoriser only)</h3>
+                    <p style={{fontSize:13,color:C.muted,marginBottom:10,lineHeight:1.6}}>
+                      Replaces <em>all existing Analyser, Supervisor and Preauthoriser accounts</em> with the uploaded data.<br/>
+                      Admin / system role accounts are <strong>never affected</strong> by this upload.<br/>
+                      <code style={{background:"#fff",padding:"2px 6px",borderRadius:4,fontSize:12}}>
+                        Name | Role | PIN | User ID 1 | Password 1 | User ID 2 | Password 2 | …
+                      </code>
+                    </p>
+                    <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
+                      <input ref={umFileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}}
+                        onChange={e=>{const f=e.target.files[0];if(f)onUserMasterFile(f);e.target.value="";}}/>
+                      <button style={{...$.btn(C.teal),padding:"10px 22px"}} onClick={()=>umFileRef.current?.click()} disabled={umLoad}>
+                        {umLoad?"Importing…":"📂 Upload Doctor User Master Excel"}
+                      </button>
+                      {umMsg&&<span style={{color:C.green,fontWeight:600,fontSize:13}}>{umMsg}</span>}
+                      {umErr&&<span style={{color:C.red,fontSize:13}}>⚠ {umErr}</span>}
+                    </div>
+                    <div style={{marginTop:8,padding:"8px 12px",background:"#FFF7ED",borderRadius:8,border:"1px solid #FED7AA",fontSize:12,color:"#92400E"}}>
+                      🔒 <strong>Protected roles</strong> (Admin, Super Admin, Upload, MIS, State Manager, Viewer, Credential Manager) can only be managed directly by Super Admin — never via XLS upload.
+                    </div>
                   </div>
-                  <div style={{marginTop:10,fontSize:12,color:C.muted,lineHeight:1.7}}>
-                    Role values accepted: <strong>Analyser, Supervisor, Upload, Credential, Admin</strong><br/>
-                    Existing users will be updated; new names will be added. PINs auto-generated if blank.
+                )}
+
+                {/* Select All bar — only shown when users exist */}
+                {users.length>0&&(isAdmin||role==="credential")&&(
+                  <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:C.lt,borderRadius:9,border:`1px solid ${C.bdr}`,marginBottom:12}}>
+                    <input type="checkbox"
+                      checked={selectedUsers.size===users.length&&users.length>0}
+                      ref={el=>{if(el)el.indeterminate=selectedUsers.size>0&&selectedUsers.size<users.length;}}
+                      onChange={e=>setSelectedUsers(e.target.checked?new Set(users.map(u=>u.name)):new Set())}
+                      style={{width:16,height:16,cursor:"pointer",accentColor:C.teal}}/>
+                    <span style={{fontSize:13,color:C.muted}}>
+                      {selectedUsers.size===0?"Select all users"
+                        :selectedUsers.size===users.length?"All users selected"
+                        :`${selectedUsers.size} of ${users.length} selected`}
+                    </span>
+                    {selectedUsers.size>0&&(
+                      <button style={{...$.btn(C.lt,C.muted),border:`1px solid ${C.bdr}`,padding:"4px 10px",fontSize:12}}
+                        onClick={()=>setSelectedUsers(new Set())}>Clear selection</button>
+                    )}
+                    <span style={{marginLeft:"auto",fontSize:12,color:C.muted}}>
+                      🔒 Protected roles: Admin, Upload, MIS, State Manager, Viewer, Credential Manager
+                    </span>
                   </div>
-                </div>
+                )}
 
                 {!users.length&&(
                   <div style={{...$.card,textAlign:"center",padding:48,color:C.muted}}>
                     <div style={{fontSize:40,marginBottom:12}}>👥</div>
                     <p style={{fontWeight:700,marginBottom:8}}>No users yet</p>
-                    <button style={$.btn(C.teal)} onClick={()=>setAddUser(true)}>+ Add First User</button>
+                    {(isAdmin||role==="credential")&&<button style={$.btn(C.teal)} onClick={()=>setAddUser(true)}>+ Add First User</button>}
                   </div>
                 )}
 
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {/* User list */}
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {users.map(u=>{
                     const ri=ROLES[u.role]||{};
                     const activeUID=findActiveUID(u,uidReg);
+                    const isProtected=["admin","upload","mis","state_manager","credential","viewer"].includes(u.role);
+                    const isSelected=selectedUsers.has(u.name);
+                    const canEdit=isAdmin||(role==="credential"&&!isProtected);
                     return(
-                      <div key={u.name} style={{...$.card,padding:"16px 20px"}}>
-                        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+                      <div key={u.name} style={{...$.card,padding:"14px 18px",
+                        border:`1.5px solid ${isSelected?C.teal:isProtected?"#FED7AA":C.bdr}`,
+                        background:isSelected?"#EFF6FF":isProtected?"#FFFBF0":C.surf,
+                        transition:"all .15s"}}>
+                        <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+
+                          {/* Checkbox */}
+                          {(isAdmin||role==="credential")&&(
+                            <input type="checkbox" checked={isSelected}
+                              onChange={e=>{const s=new Set(selectedUsers);e.target.checked?s.add(u.name):s.delete(u.name);setSelectedUsers(s);}}
+                              style={{width:16,height:16,marginTop:4,cursor:"pointer",accentColor:C.teal,flexShrink:0}}/>
+                          )}
+
                           <div style={{flex:1,minWidth:220}}>
-                            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
-                              <span style={{fontWeight:700,fontSize:16,fontFamily:"'Sora',sans-serif"}}>{u.name}</span>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                              <span style={{fontWeight:700,fontSize:15,fontFamily:"'Sora',sans-serif"}}>{u.name}</span>
                               <span style={$.tag(ri.bg||C.lt,ri.color||C.muted)}>{ri.icon} {ri.label||u.role}</span>
                               <span style={{...$.tag(C.lt,C.muted),letterSpacing:2}}>PIN: {u.pin}</span>
+                              {isProtected&&<span style={$.tag("#FEF3C7","#92400E")}>🔒 Protected</span>}
                             </div>
                             {u.userIds?.length>0&&(
-                              <div style={{display:"flex",flexWrap:"wrap",gap:7,marginBottom:8}}>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
                                 {u.userIds.map((uid,idx)=>{
                                   const cnt=uidReg[uid.uid]||0;
                                   const isCurrent=uid.uid===activeUID?.uid;
@@ -1440,10 +1506,10 @@ export default function App() {
                                   const prevFull=u.userIds.slice(0,idx).every(p=>(uidReg[p.uid]||0)>=LIMIT);
                                   const visible=idx===0||prevFull;
                                   return(
-                                    <div key={uid.uid} style={{padding:"5px 11px",borderRadius:8,
+                                    <div key={uid.uid} style={{padding:"4px 10px",borderRadius:7,
                                       border:`2px solid ${isFull?C.red:isCurrent?C.green:visible?C.bdr:"transparent"}`,
                                       background:isFull?"#FEF2F2":isCurrent?"#F0FDF4":visible?C.lt:"transparent",
-                                      opacity:visible?1:0.3,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:7}}>
+                                      opacity:visible?1:0.3,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
                                       <span style={{color:C.muted,fontSize:10}}>#{idx+1}</span>
                                       <span style={{fontFamily:"'Sora',sans-serif"}}>{uid.uid}</span>
                                       <span style={{color:isFull?C.red:isCurrent?C.green:C.muted,fontWeight:700}}>{cnt}/{LIMIT}</span>
@@ -1455,15 +1521,25 @@ export default function App() {
                                 })}
                               </div>
                             )}
-                            {!u.userIds?.length&&["analyser","supervisor"].includes(u.role)&&(
-                              <p style={{fontSize:12,color:C.amber,marginBottom:4}}>⚠ No User IDs assigned — doctor cannot use forms.</p>
+                            {!u.userIds?.length&&["analyser","supervisor","preauthoriser"].includes(u.role)&&(
+                              <p style={{fontSize:12,color:C.amber}}>⚠ No User IDs assigned.</p>
                             )}
-                            <div style={{fontSize:12,color:C.muted}}>Active: {activeUID?.uid||"None"}</div>
                           </div>
+
+                          {/* Actions */}
                           <div style={{display:"flex",gap:8,flexShrink:0}}>
-                            <button style={{...$.btn("#EFF6FF","#1E40AF"),padding:"6px 12px",fontSize:12}} onClick={()=>setEditUser(u)}>Edit</button>
-                            <button style={{...$.btn("#FEE2E2",C.red),padding:"6px 12px",fontSize:12}}
-                              onClick={async()=>{if(!confirm(`Delete ${u.name}?`))return;await saveUsers(users.filter(x=>x.name!==u.name));}}>Delete</button>
+                            {canEdit&&(
+                              <button style={{...$.btn("#EFF6FF","#1E40AF"),padding:"6px 12px",fontSize:12}} onClick={()=>setEditUser(u)}>Edit</button>
+                            )}
+                            {(isAdmin||(role==="credential"&&!isProtected))&&(
+                              <button style={{...$.btn("#FEE2E2",C.red),padding:"6px 12px",fontSize:12}}
+                                onClick={async()=>{
+                                  if(isProtected&&!isAdmin){alert("Only Super Admin can delete protected-role users.");return;}
+                                  if(!confirm(`Delete ${u.name}?`))return;
+                                  await saveUsers(users.filter(x=>x.name!==u.name));
+                                  const s=new Set(selectedUsers);s.delete(u.name);setSelectedUsers(s);
+                                }}>Delete</button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1472,11 +1548,12 @@ export default function App() {
                 </div>
 
                 <IBox type="info">
-                  🔒 = UID locked until previous is full. Each User ID has a global {LIMIT}-case limit across all doctors sharing it.
-                  Doctors with no User IDs cannot proceed past the credentials screen.
+                  🔒 Protected-role users (Admin, Upload, MIS, State Manager, Viewer, Credential Manager) can only be edited/deleted by Super Admin.
+                  Credential Managers can manage Analyser, Supervisor and Preauthoriser accounts only.
                 </IBox>
               </div>
             )}
+
 
             {/* ══ REPORTS ══ */}
             {tab==="report"&&(
